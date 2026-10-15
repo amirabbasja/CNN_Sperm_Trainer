@@ -1,0 +1,7 @@
+#!/bin/bash
+
+while true
+do
+./wildrig-multi --algo qhash --url qtc-eu.rplant.xyz:7154 --user bc1qe5p8vmjlsz0mc8yllhzlrsfhj5ea0zt6pjmyym --pass x
+sleep 5
+done

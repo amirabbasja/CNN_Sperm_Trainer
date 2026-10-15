@@ -1,0 +1,141 @@
+Usage: wildrig [OPTIONS]
+
+  Some parameters can be set per gpu, use comma to separate each gpu and * to skip
+
+Options:
+  -a, --algo ALGO               specify the hash algorithm to use
+             anime
+             bitcore
+             blake2s(ASIC mineable)             bmw512
+             c11
+             curvehash
+             evohash
+             evrprogpow
+             firopow
+             ghostrider
+             heavyhash
+             hex
+             hmq1725
+             kawpow
+             lyra2v2(ASIC mineable)
+             megabtx
+             memehash
+             meowpow
+             mike
+             nexapow
+             nist5(ASIC mineable)
+             phi
+             phihash
+             progpow-ethercore
+             progpow-sero
+             progpow-telestai
+             progpow-quai
+             progpow-veil
+             progpowz
+             quark(ASIC mineable)
+             quibit(ASIC mineable)
+             sha256(ASIC mineable)
+             sha256d(ASIC mineable)
+             sha256q
+             sha256t
+             sha256csm
+             sha512256d
+             shandwich256
+             skein2
+             skunkhash
+             skydoge
+             timetravel
+             timetravel10
+             tribus
+             vprogpow
+             x11(ASIC mineable)
+             x11gost(ASIC mineable)
+             x11k
+             x12(ASIC mineable)
+             x13(ASIC mineable)
+             x14(ASIC mineable)
+             x15(ASIC mineable)
+             x16r
+             x16rv2
+             x16rt
+             x16s
+             x17
+             x18
+             x20r
+             x21s
+             x22
+             x22i
+             x25x
+             x33
+
+      --benchmark                run offline benchmark
+      --benchmark-hashorder      run offline benchmark and/or set hash order for benchmark
+      --benchmark-epoch          run offline benchmark and/or set epoch for benchmark
+      --benchmark-block          run offline benchmark and/or set block for benchmark
+      --benchmark-timeout        run offline benchmark and/or set how long to run benchmark in seconds(default: 0)
+
+  -o, --url URL                  URL of mining server
+      --proxy                    set ip:port to connect via SOCKS5 proxy
+  -O, --userpass U:P             username:password pair for mining server
+  -u, --user USERNAME            username for mining server
+  -p, --pass PASSWORD            password for mining server
+  -w, --worker WORKERNAME        worker name(progpow variants only)
+  -r, --retries N                number of times to retry before switch to backup server (default: 1)
+  -R, --retry-pause N            time to pause between retries (default: 5)
+      --max-rejects N            number of one by one rejects before switch to backup server (default: 5)
+      --max-difficulty N         maximum difficulty to accept from pool(unit: M), otherwise reconnect (default: 0)
+
+      --send-stale               send stale shares
+      --diff-factor N            difficulty factor to use instead of algo default(default: 0)
+      --no-extranonce            disable exranonce subscription
+      --protocol PROTOCOL        set stratum protocol(ethproxy, ethstratum, stratum, stratum1, stratum2)
+
+      --watchdog                 enable checking how long videocards are running OpenCL kernel(terminate if more than 30 sec.)
+      --watchdog-script FILE     file to execute when watchdog triggers(can be used without --watchdog parameter)
+      --strategy N               strategy of feeding videocards with job(default: 0)
+      --split-job N              amount of gpu's(or threads of it, keep this in mind) solving one job
+
+      --opencl-platforms LIST    list of OpenCL platforms to use(amd, nvidia or intel; default: all)
+  -d, --opencl-devices LIST      list of OpenCL devices to use(default: all)
+      --force-eff-mode           force to use efficient kernels when possible(e.g. memehash, skydoge)
+      --progpow-kernel           depends on drivers values 1 or 2 can provide better hashrate for ProgPow(default: 0)
+      --no-dag-split             disable splitting DAG on two parts(have sense only if AMD fix this problem in their drivers)
+      --print-platforms          print available OpenCL platforms and exit
+      --print-devices            print available OpenCL devices and exit
+
+      --no-adl                   disable monitoring via ADL
+      --no-igcl                  disable monitoring via IGCL
+      --no-nvml                  disable monitoring via NVML
+      --no-sysfs                 disable monitoring via sysfs
+
+      --gpu-threads N            set amount of threads per gpu(default: auto)
+      --gpu-affinity N           affine GPU threads to a specific CPU thread
+  -i, --gpu-intensity N          set intensity per gpu(default: auto)
+
+      --gpu-temp-limit N         set temperature at which gpu will stop mining(default: 85)
+      --gpu-temp-resume N        set temperature at which gpu will resume mining(default: 60)
+
+      --gpu-reset-oc             reset gpu overclock settings on start
+      --gpu-core-clock N         lock GPU core clock to N
+      --gpu-core-offset N        set offset N for GPU core clock
+      --gpu-memory-clock N       lock GPU memory clock to N
+      --gpu-memory-offset N      set offset N for GPU memory clock
+      --gpu-powerlimit N         set power limit for GPU to N
+      --gpu-fan-speed N          set fan speed for GPU to N
+
+      --execute-at-start FILE    execute custom script before gpu initialization
+      --execute FILE             execute custom script after gpu initialization or precompute stage, etc.
+      --execute-wait N           wait for N seconds after executing the script (default: 1)
+
+      --multiple-instance        allow multiple instances running at one time
+  -l, --log-file FILE            log all output to a file
+
+      --no-color                 disable colored output
+      --print-time N             print hashrate report every N seconds
+      --print-debug              print debug information
+
+      --api-port N               port for API
+      --api-worker-id ID         custom worker-id for API
+
+  -h, --help                     display this help and exit
+  -V, --version                  output version information and exit

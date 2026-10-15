@@ -1,0 +1,2 @@
+# Copy this file to links.txt and add one complete ss:// or vless:// share link per line.
+# Blank lines and comments are ignored. Keep links.txt private.
