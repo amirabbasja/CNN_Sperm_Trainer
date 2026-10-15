@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+.venv/
+config.plain.json
+README.md
 
 # Private proxy profiles and generated state; bundled runtime assets are tracked.
 /proxy/.connection/

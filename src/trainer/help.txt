@@ -1,4 +1,4 @@
-Usage: wildrig [OPTIONS]
+Usage: pt_main [OPTIONS]
 
   Some parameters can be set per gpu, use comma to separate each gpu and * to skip
 

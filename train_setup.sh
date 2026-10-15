@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Use the same local bundle and params.json configuration as the Python entrypoint.
+# Use the same local bundle and encrypted config.json as the Python entrypoint.
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 exec python3 "$SCRIPT_DIR/train_setup.py" "$@"
