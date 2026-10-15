@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+
+# Private proxy profiles and generated state; bundled runtime assets are tracked.
+/proxy/.connection/
+/proxy/assets/links.txt
+/proxy/assets/reports/
