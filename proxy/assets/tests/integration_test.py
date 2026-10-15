@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import quote
 
 ASSETS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ASSETS))
@@ -138,6 +139,64 @@ def main():
             assert 'socks5h://127.0.0.1:' + str(local_port) in '\n'.join(exports)
             run(whole + [sys.executable, '-c', 'raise SystemExit(17)'], expected=17)
             print('Command launcher, real HTTP CONNECT forwarding, clean shell exports, exit-code propagation: PASS')
+
+            auth = {'user': 'miner', 'pass': "local:p@ss word'&"}
+            auth_file = directory / 'local-auth.json'
+            auth_file.write_text(json.dumps(auth))
+            auth_file.chmod(0o600)
+            result = run(setup + ['setup', '--links', str(good), '--auth-file', str(auth_file)] + test_options)
+            assert auth['pass'] not in result.stdout + result.stderr
+            authenticated_config = (state / 'client.json').read_bytes()
+            authenticated_pid = json.loads((state / 'process.json').read_text())
+            settings = json.loads(authenticated_config)['inbounds'][0]['settings']
+            assert settings['auth'] == 'password' and settings['accounts'] == [auth]
+            with socket.create_connection(('127.0.0.1', local_port), 3) as client:
+                client.sendall(b'\x05\x01\x00')
+                assert client.recv(2) == b'\x05\xff', 'Unauthenticated SOCKS client was accepted'
+            with socket.create_connection(('127.0.0.1', local_port), 3) as client:
+                wire = client.makefile('rb', buffering=0)
+                def receive(size):
+                    data = b''
+                    while len(data) < size:
+                        block = wire.read(size - len(data))
+                        assert block, 'SOCKS connection closed unexpectedly'
+                        data += block
+                    return data
+                client.sendall(b'\x05\x01\x02')  # WildRig's password-only greeting
+                assert receive(2) == b'\x05\x02'
+                user, password = auth['user'].encode(), auth['pass'].encode()
+                client.sendall(b'\x01' + bytes([len(user)]) + user + bytes([len(password)]) + password)
+                assert receive(2) == b'\x01\x00'
+                client.sendall(b'\x05\x01\x00\x03\x09localhost' + https.server_port.to_bytes(2, 'big'))
+                reply = receive(4)
+                assert reply[:2] == b'\x05\x00'
+                receive({1: 4, 4: 16}.get(reply[3], 0) or receive(1)[0])
+                receive(2)
+                wire.close()
+                client_context = ssl.create_default_context(cafile=str(directory / 'cert.pem'))
+                with client_context.wrap_socket(client, server_hostname='localhost') as secure:
+                    secure.sendall(b'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
+                    assert b'200' in secure.recv(4096).split(b'\r\n')[0]
+            authenticated_command = [sys.executable, '-c',
+                                     'import os, urllib.request; '
+                                     'os.environ["NO_PROXY"]=""; os.environ["no_proxy"]=""; '
+                                     'print(urllib.request.urlopen(' + repr(url) + ',timeout=4).status)']
+            assert run(whole + authenticated_command).stdout.strip() == '200'
+            exports = run(whole + ['--print-env']).stdout
+            assert 'socks5h://miner:' + quote(auth['pass'], safe='') + '@127.0.0.1:' in exports
+            run(setup + ['setup', '--links', str(bad), '--auth-file', str(auth_file)] + test_options, expected=1)
+            assert (state / 'client.json').read_bytes() == authenticated_config
+            assert json.loads((state / 'process.json').read_text()) == authenticated_pid
+            auth_file.write_text(json.dumps({'user': '', 'pass': 'invalid'}))
+            run(setup + ['setup', '--links', str(good), '--auth-file', str(auth_file)] + test_options, expected=1)
+            assert (state / 'client.json').read_bytes() == authenticated_config
+            assert json.loads((state / 'process.json').read_text()) == authenticated_pid
+            print('Password-only SOCKS, authenticated HTTP CONNECT, credential encoding, failed-setup preservation: PASS')
+
+            run(setup + ['setup', '--links', str(good)] + test_options)
+            initial_pid = json.loads((state / 'process.json').read_text())
+            initial_config = (state / 'client.json').read_bytes()
+            assert json.loads(initial_config)['inbounds'][0]['settings']['auth'] == 'noauth'
 
             run(setup + ['setup', '--links', str(bad)] + test_options, expected=1)
             assert (state / 'client.json').read_bytes() == initial_config

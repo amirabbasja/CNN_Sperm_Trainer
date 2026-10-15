@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import quote
 
 from check_profiles import ASSETS, ProfileError, bundled_binary, stop_process
 
@@ -218,13 +219,28 @@ def check_links(args, candidate=None):
         stop_process(process)
 
 
+def validate_local_auth(auth):
+    if (not isinstance(auth, dict) or any(
+            not isinstance(auth.get(key), str) or not 1 <= len(auth[key].encode('utf-8')) <= 255
+            for key in ('user', 'pass'))):
+        raise ProfileError('Local proxy authentication requires user and pass strings of 1..255 UTF-8 bytes.')
+    return {key: auth[key] for key in ('user', 'pass')}
+
+
 def setup(args):
+    auth = None
+    if args.auth_file is not None:
+        auth = validate_local_auth(json.loads(args.auth_file.read_text(encoding='utf-8')))
     with tempfile.TemporaryDirectory(prefix='candidate-', dir=STATE) as scratch:
         candidate = Path(scratch) / 'client.json'
         code = check_links(args, candidate)
         if code:
             print('No new profile activated. The existing saved/running client was kept.', file=sys.stderr)
             return code
+        if auth is not None:
+            config = json.loads(candidate.read_text())
+            config['inbounds'][0]['settings'].update(auth='password', accounts=[auth])
+            private_write(candidate, json.dumps(config) + '\n')
         validate(candidate)
         current = tracked()
         if not current or current['port'] != args.port:
@@ -250,9 +266,13 @@ def setup(args):
     return 0
 
 
-def proxy_variables(port):
-    http = f'http://127.0.0.1:{port}'
-    socks = f'socks5h://127.0.0.1:{port}'
+def proxy_variables(port, auth=None):
+    credentials = ''
+    if auth is not None:
+        auth = validate_local_auth(auth)
+        credentials = quote(auth['user'], safe='') + ':' + quote(auth['pass'], safe='') + '@'
+    http = f'http://{credentials}127.0.0.1:{port}'
+    socks = f'socks5h://{credentials}127.0.0.1:{port}'
     return {'http_proxy': http, 'https_proxy': http, 'all_proxy': socks,
             'HTTP_PROXY': http, 'HTTPS_PROXY': http, 'ALL_PROXY': socks,
             'no_proxy': 'localhost,.localhost,127.0.0.1,::1',
@@ -274,7 +294,14 @@ def connect(arguments):
         saved = tracked()
         if not saved:
             raise ProfileError('Client is not running.')
-    variables = proxy_variables(saved['port'])
+        settings = json.loads(CONFIG.read_text())['inbounds'][0]['settings']
+        auth = None
+        if settings.get('auth') == 'password':
+            accounts = settings.get('accounts', [])
+            if not accounts:
+                raise ProfileError('Saved proxy configuration is missing its local account.')
+            auth = validate_local_auth(accounts[0])
+        variables = proxy_variables(saved['port'], auth)
     if print_env:
         for name, value in variables.items():
             print('export ' + name + '=' + shlex.quote(value))
@@ -306,6 +333,9 @@ def main():
         item.add_argument('--url', default='https://example.com/')
         item.add_argument('--tag')
         item.add_argument('--ca-file')
+        if action == 'setup':
+            item.add_argument('--auth-file', type=Path,
+                              help='private JSON with user/pass for the activated local listener')
     for action in ('start', 'stop', 'restart', 'status', 'check', 'logs', 'verify'):
         sub.add_parser(action)
     if not arguments or (arguments[0].startswith('-') and arguments[0] not in ('-h', '--help')):
