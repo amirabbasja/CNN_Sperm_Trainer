@@ -71,6 +71,16 @@ class EditConfigTests(unittest.TestCase):
         self.assertIn("wrong decKey", result.stderr)
         self.assertEqual(self.path.read_text(), original)
 
+    def test_share_link_is_saved_exactly_and_encrypted(self):
+        link = "vless://example-id@proxy.example.invalid:443?security=tls&type=ws&path=%2Fws#My%20proxy"
+        result = self.run_cli("proxyConfig=" + link, "useProxy=true")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        content = self.path.read_text()
+        self.assertNotIn(link, content)
+        config = decrypt_config(json.loads(content))
+        self.assertEqual(config["proxyConfig"], link)
+        self.assertIs(config["useProxy"], True)
+
     def test_failed_replace_preserves_original_and_cleans_temporary_file(self):
         with patch("edit_config.os.replace", side_effect=OSError("cannot replace")):
             with self.assertRaisesRegex(OSError, "cannot replace"):

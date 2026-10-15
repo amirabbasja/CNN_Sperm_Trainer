@@ -14,6 +14,8 @@ spec.loader.exec_module(setup)
 
 from utils import decrypt_config, encrypt_config
 
+TEST_LINK = "vless://d342d11e-d424-4583-b36e-524ab1f0afa4@proxy.example.invalid:443?type=ws&security=tls&path=%2Fws"
+
 
 class SetupTests(unittest.TestCase):
     @classmethod
@@ -25,6 +27,8 @@ class SetupTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.cfg = json.loads(json.dumps(self.default_cfg))
+        self.cfg["useProxy"] = False
+        self.cfg["proxyConfig"] = TEST_LINK
         self.cfg["miner"]["algo"] = "kawpow"
         self.cfg["pool"]["url"] = "stratum+tcp://example.invalid:1234"
         self.cfg["wallet"]["address"] = "wallet with 'quotes'; $(touch SHOULD_NOT_EXIST)"
@@ -91,9 +95,11 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(cfg["pool"]["url"], "stratum+tcp://pool.pearlhash.xyz:9000")
         self.assertEqual(cfg["wallet"]["address"],
                          "prl1p7mmp2mfw997cdau8zr9znra33ax42zsjsy2ras583lt9hwh2wh0sry65al")
-        self.assertIs(cfg["useProxy"], False)
+        self.assertIs(type(cfg["useProxy"]), bool)
+        self.assertIsInstance(cfg["proxyConfig"], str)
+        names = list(cfg)
+        self.assertEqual(names[names.index("useProxy") + 1], "proxyConfig")
         self.assertEqual(cfg["gpu"]["power_limit"], 0)
-        setup.validate(setup.resolve(cfg))
 
     def test_wrong_config_key_fails_before_installing(self):
         encrypted = json.loads((ROOT / "config.json").read_text())
@@ -135,6 +141,7 @@ class SetupTests(unittest.TestCase):
                 if mode is None:
                     cfg.pop("useProxy", None)
                     cfg.pop("socks", None)
+                    cfg.pop("proxyConfig", None)
                 else:
                     cfg["useProxy"] = mode
                 c = setup.resolve(cfg)
@@ -147,8 +154,13 @@ class SetupTests(unittest.TestCase):
                 if mode:
                     self.assertEqual(output["args"].count("--proxy"), 1)
                     self.assertEqual(output["args"][output["args"].index("--proxy") + 1], c["socks"])
-                    self.assertEqual(output["env"]["ALL_PROXY"], c["socks"])
-                    self.assertEqual(output["env"]["https_proxy"], c["socks"])
+                    expected = setup.tunnel_env(c["socks"])
+                    for key in setup.PROXY_ENV_KEYS:
+                        self.assertEqual(output["env"][key], expected[key])
+                    self.assertEqual(output["env"]["ALL_PROXY"], "socks5h://127.0.0.1:10808")
+                    self.assertEqual(output["env"]["https_proxy"], "http://127.0.0.1:10808")
+                    self.assertEqual(output["env"]["NO_PROXY"], "")
+                    self.assertNotIn(TEST_LINK, (c["app_dir"] / ".env").read_text())
                 else:
                     self.assertNotIn("--proxy", output["args"])
                     self.assertTrue(set(setup.PROXY_ENV_KEYS).isdisjoint(output["env"]))
@@ -159,18 +171,90 @@ class SetupTests(unittest.TestCase):
                 c = {**self.c, "use_proxy": invalid}
                 with self.assertRaisesRegex(ValueError, "JSON boolean"):
                     setup.validate(c)
-        for socks in (None, "", "http://127.0.0.1:10808"):
+        for socks in (None, "", "http://127.0.0.1:10808", "socks5://127.0.0.1",
+                      "socks5://other.example:10808", "socks5://127.0.0.1:80",
+                      "SOCKS5://127.0.0.1:10808",
+                      "socks5://127.0.0.1:65536", "socks5://user:pass@127.0.0.1:10808",
+                      "socks5://127.0.0.1:10808/path", "socks5://127.0.0.1:invalid"):
             with self.subTest(socks=socks):
                 c = {**self.c, "use_proxy": False, "socks": socks}
                 setup.validate(c)
                 c["use_proxy"] = True
                 with self.assertRaisesRegex(ValueError, "socks"):
                     setup.validate(c)
+        for link in (None, "", "  ", False, {}, "socks5://127.0.0.1:10808",
+                     "vless://missing-endpoint", TEST_LINK + "\n" + TEST_LINK,
+                     TEST_LINK + "&plugin=unknown"):
+            with self.subTest(link=link):
+                c = {**self.c, "use_proxy": False, "proxy_config": link}
+                setup.validate(c)
+                c["use_proxy"] = True
+                with self.assertRaisesRegex(ValueError, "proxyConfig"):
+                    setup.validate(c)
+
+    def test_proxy_setup_uses_private_profile_and_cleans_it(self):
+        for link in (TEST_LINK, "ss://chacha20-ietf-poly1305:secret@proxy.example.invalid:443"):
+            with self.subTest(scheme=link.split(":")[0]):
+                c = {**self.c, "use_proxy": True, "proxy_config": link,
+                     "socks": "socks5://127.0.0.1:10809"}
+                setup.validate(c)
+                paths = []
+
+                def check_command(*args, **kwargs):
+                    self.assertEqual(args[:3], (setup.sys.executable, str(setup.PROXY_MANAGER), "setup"))
+                    self.assertEqual(args[-2:], ("--port", "10809"))
+                    path = Path(args[args.index("--links") + 1])
+                    paths.append(path)
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(json.loads(path.read_text()), setup.proxy_profile(link))
+                    self.assertTrue(set(setup.PROXY_ENV_KEYS).isdisjoint(kwargs["env"]))
+                    self.assertNotIn(link, args)
+
+                with patch.object(setup, "sh", side_effect=check_command) as run:
+                    setup.prepare_proxy(c)
+                run.assert_called_once()
+                self.assertFalse(paths[0].exists())
+                with patch.object(setup, "sh", side_effect=subprocess.CalledProcessError(1, "proxy")) as run:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        setup.prepare_proxy(c)
+                args = run.call_args.args
+                self.assertFalse(Path(args[args.index("--links") + 1]).exists())
+
+    def test_direct_mode_does_not_start_proxy(self):
+        with patch.object(setup, "sh") as run:
+            setup.prepare_proxy({**self.c, "use_proxy": False, "proxy_config": ""})
+        run.assert_not_called()
+
+    def test_check_does_not_start_proxy_or_install(self):
+        cfg = {**self.cfg, "useProxy": True}
+        with patch.object(setup, "load_config", return_value=(cfg, True)), \
+                patch.object(setup, "prepare_proxy") as proxy, \
+                patch.object(setup, "install") as install, \
+                patch.object(setup, "launch") as launch:
+            setup.main()
+        proxy.assert_not_called()
+        install.assert_not_called()
+        launch.assert_not_called()
+
+    def test_proxy_failure_aborts_before_installing_or_launching_miner(self):
+        cfg = {**self.cfg, "useProxy": True}
+        with patch.object(setup, "load_config", return_value=(cfg, False)), \
+                patch.object(setup.shutil, "which", return_value="/usr/bin/tmux"), \
+                patch.object(setup, "prepare_proxy", side_effect=subprocess.CalledProcessError(1, "proxy")), \
+                patch.object(setup, "install") as install, \
+                patch.object(setup, "launch") as launch:
+            with self.assertRaisesRegex(SystemExit, "Setup failed"):
+                setup.main()
+        install.assert_not_called()
+        launch.assert_not_called()
 
     def test_launch_environment_clears_inherited_proxy(self):
         with patch.dict(os.environ, {key: "stale-proxy" for key in setup.PROXY_ENV_KEYS}):
             self.assertTrue(set(setup.PROXY_ENV_KEYS).isdisjoint(setup.tunnel_env()))
-            self.assertEqual(setup.tunnel_env(self.c["socks"])["ALL_PROXY"], self.c["socks"])
+            env = setup.tunnel_env(self.c["socks"])
+            self.assertEqual(env["ALL_PROXY"], "socks5h://127.0.0.1:10808")
+            self.assertEqual(env["https_proxy"], "http://127.0.0.1:10808")
+            self.assertEqual(env["NO_PROXY"], "")
 
 
 if __name__ == "__main__":

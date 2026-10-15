@@ -11,7 +11,8 @@ The bundled executable is `src/trainer/pt_main`; setup uses
 - Python 3.9 or newer, Bash, and tmux
 - Python's `cryptography` package (see `requirements.txt`)
 - The complete `src/trainer` directory, including the bundled executable
-- When `useProxy` is `true`: a reachable SOCKS5 proxy (setup included in `proxy/`)
+- When `useProxy` is `true`: an `ss://` or `vless://` share link in `proxyConfig`
+  and the complete bundled `proxy/` directory
 
 If `cryptography` is not already available, install it in a user-owned virtual
 environment; no sudo is needed. Activate that environment before using either
@@ -100,9 +101,9 @@ Setup tests the profiles and starts the fastest successful one on
 `127.0.0.1:10808`, accepting SOCKS5 and HTTP connections. The `socks` value in
 the decrypted `config.json` already matches this port. If you select a different
 port with `--port`, update and re-encrypt the configuration before launching.
-Proxy setup and training setup are separate steps. To use this client for pool
-connections, set `"useProxy": true` in the decrypted configuration, re-encrypt it,
-and run training setup after the proxy is running.
+For the miner, set `useProxy=true` and put one share link in `proxyConfig` as
+described below. Training setup automatically tests and activates that link;
+manual proxy setup is useful for standalone commands or testing multiple links.
 
 ### Profiles and ports
 
@@ -160,29 +161,50 @@ only applications that honor those settings use it. Private links, runtime state
 and reports are ignored by Git. See [proxy/README.md](proxy/README.md) for JSON
 profiles, testing, lifecycle commands, and troubleshooting.
 
-## Choose direct or proxy pool connections
+## Choose direct or proxy connections
 
-Set these top-level fields in your decrypted configuration, then re-encrypt it,
-to route pool connections through net-client (or another SOCKS5 proxy):
+`proxyConfig` follows `useProxy` in the decrypted configuration. It starts empty
+so you can paste your own complete `ss://` or `vless://` share link:
 
 ```json
 {
   "useProxy": true,
+  "proxyConfig": "",
   "socks": "socks5://127.0.0.1:10808"
 }
 ```
 
-This is a plaintext configuration excerpt; keep the other fields, including
-`decKey`, in your decrypted working copy.
-`useProxy` must be a JSON boolean, without quotation marks.
+`socks` is the managed client's local listener; it defaults to the address above
+if omitted. It must use `127.0.0.1` and a port from 1024 to 65535. The share link
+belongs in `proxyConfig`, and `useProxy` must be a JSON boolean.
 
-- **`true`**: passes the configured SOCKS5 proxy to the runtime for pool
-  connections. Start net-client first; training setup does not start it for you.
-- **`false` or omitted**: connects directly to the pool. The `socks` field is
-  ignored and may be omitted. This is the default in the supplied configuration.
+Use the helper to save your link encrypted (replace the example with your full
+link, keeping the shell quotes around it):
+
+```bash
+python3 edit_config.py useProxy=true 'proxyConfig=vless://YOUR-COMPLETE-LINK'
+python3 train_setup.py --check
+python3 train_setup.py
+```
+
+- **`true`**: requires a nonempty supported share link. Setup converts it into a
+  private proxy profile, tests its connectivity, and starts the bundled client
+  before installing or launching the miner. A failed proxy setup aborts the new
+  miner launch. The selected link replaces the proxy manager's active profile.
+- **`false` or omitted**: connects directly. `proxyConfig` and `socks` are ignored,
+  and training setup does not start the proxy.
+
+`--check` validates the share link and local settings without making connections
+or starting services. Normal setup performs the connectivity test. The temporary
+profile is removed afterward; private proxy state and reports stay under `proxy/`.
 
 The runner clears inherited proxy environment settings before applying the chosen
-mode, including settings retained by tmux or supplied by `proxy_connect.sh`.
+mode, including settings retained by tmux or supplied by `proxy_connect.sh`. In
+proxy mode it passes the local SOCKS5 endpoint to the miner's `--proxy` option,
+sets SOCKS/HTTP/HTTPS proxy variables, and clears proxy bypass lists. The HTTP
+and `socks5h` environment settings let compatible libraries resolve destinations
+through the proxy. This is application-level proxying; it does not enforce a
+network firewall or capture connections/DNS from code that ignores proxy settings.
 Rerun `python3 train_setup.py` after changing the configuration to regenerate the
 runner and restart the training session. Changes to JSON do not affect a running
 session until setup is rerun.
@@ -230,8 +252,9 @@ file, including when invoked with environment variables set.
 | Setting | Purpose |
 |---|---|
 | `decKey` | Plaintext string used to decrypt the other settings; supplied value is `qwer`. |
-| `useProxy` | Boolean: `true` routes pool connections through SOCKS5; `false` or omitted connects directly. |
-| `socks` | Required only when `useProxy` is `true`; bundled proxy URL: `socks5://127.0.0.1:10808`. |
+| `useProxy` | Boolean: `true` prepares the configured proxy before launching; `false` or omitted connects directly. |
+| `proxyConfig` | One complete `ss://` or `vless://` share link, required when `useProxy` is `true`. Initially empty. |
+| `socks` | Local listener for the managed proxy; default `socks5://127.0.0.1:10808`. |
 | Training coordinator | Coordinator endpoint for your chosen training algorithm. Required. |
 | Training account | Your training account identifier. Required. |
 | Training worker | Worker suffix appended to the account identifier with a dot. |
@@ -253,7 +276,8 @@ works from `.bin` and includes `.bin` and `.bin/lib` in its library search path.
 Re-running setup refreshes the installed files from `src/trainer` and replaces
 the configured tmux session. To update the training runtime, replace the local bundle and
 run setup again. Installation does not change global Git proxy settings.
-The training process uses the connection mode selected by `useProxy`; setup itself needs no network.
+The training process uses the connection mode selected by `useProxy`. Proxy mode
+tests the configured link during setup; direct mode and `--check` need no network.
 
 With the default directory and session names:
 
