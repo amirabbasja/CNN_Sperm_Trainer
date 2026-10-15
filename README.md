@@ -38,7 +38,22 @@ with a random salt and scrypt key derivation for each token. Wrong keys and
 damaged tokens fail before installation. The supplied configuration contains
 the requested PearlHash algorithm, pool endpoint, and wallet address.
 
-To change a setting, decrypt a working copy, edit it, then encrypt it again:
+Use `edit_config.py` to view settings or change them in one command:
+
+```bash
+python3 edit_config.py                              # Show decrypted settings
+python3 edit_config.py useProxy=true gpu.power_limit=120
+python3 edit_config.py worker=my-gpu
+```
+
+Changes are decrypted in memory and saved encrypted with file mode `600` using
+an atomic replacement. Values accept JSON (booleans, numbers, objects, lists,
+and null) or unquoted strings. Use dotted paths for nested objects, and `-c PATH`
+for another config file. To keep a JSON-looking value as a string, quote it as
+JSON, for example `worker='"123"'`. Set `decKey=new-key` to change the key and
+re-encrypt all settings. Without changes, the helper only prints the settings.
+
+Alternatively, decrypt a working copy, edit it, then encrypt it again:
 
 ```bash
 python3 utils.py decrypt config.json -o config.plain.json
@@ -177,6 +192,7 @@ session until setup is rerun.
 ```text
 config.json             encrypted training and SOCKS settings, plus decKey
 utils.py                encryption helpers and config editing CLI
+edit_config.py          view decrypted settings or update and re-encrypt in place
 requirements.txt        Python encryption dependency
 train_setup.py / .sh     training setup entrypoints
 src/trainer/            bundled GPU runtime
