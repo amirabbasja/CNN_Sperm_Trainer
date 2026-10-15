@@ -69,3 +69,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 assets/tests/integration_test.py
 Only the integration test additionally needs the `openssl` command to create a
 temporary local certificate and permission to open localhost sockets. Setup and
 normal use do not require that command. The tests do not require root.
+
+The integration suite also checks password-only SOCKS5 negotiation, authenticated
+HTTP CONNECT, encoded credentials in the launcher environment, and preservation
+of the active authenticated profile when a candidate fails.
+
+From the project root, `python3 tests/integration_wildrig_proxy.py` additionally
+starts the bundled WildRig and Xray executables with the generated mining runner.
+It verifies that WildRig authenticates and sends data to a loopback test pool.
+Only dummy credentials are used, and no mining jobs are supplied. This verifies
+the local protocol fix, not acceptance of shares by a live pool.

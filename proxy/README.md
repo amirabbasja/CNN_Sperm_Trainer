@@ -137,6 +137,16 @@ bash connection_setup.sh verify                   # bundled asset checksums
 ```
 
 `status` confirms a matching local process, not that the upstream still works.
+
+The mining setup uses password authentication on the local listener for WildRig
+compatibility. `proxy_connect.sh` reads that account from the private saved profile
+and includes it in the exported proxy URLs for SOCKS5 and HTTP clients. Standalone
+setup remains unauthenticated by default. To activate an authenticated listener,
+pass `setup --auth-file /path/to/private.json`, where the file contains `user` and
+`pass` strings (1..255 UTF-8 bytes each). Keep this file private. The profile checks
+use temporary unauthenticated listeners before the selected local account is applied.
+Printed exports and child-process environments then contain those local credentials.
+
 There is no automatic failover or periodic retesting. Rerun setup to select
 another profile. The old client remains running while new candidates are tested.
 If none passes, it is kept. On activation, the prior config is backed up as
@@ -199,8 +209,8 @@ replacing it. Do not publish the input, `.connection`, or `assets/reports`.
 Checksums exclude editable input and generated state. If you intentionally edit
 bundled Python code, the manifest must also be regenerated before setup/start.
 
-The proxy is unauthenticated on localhost; other processes sharing your host
-network namespace may be able to use it. This package is intended for your own
+The standalone proxy defaults to unauthenticated localhost access; other processes
+sharing your host network namespace may be able to use it. This package is intended for your own
 workspace. Stop it before moving or deleting the package; PID checks include
 the executable path and kernel process start time. Concurrent control operations
 are locked. Logs rotate on startup when larger than 5 MiB, not continuously.

@@ -9,13 +9,14 @@ Usage:
 import argparse
 import json
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from proxy.assets.share_links import import_link
 from utils import decrypt_config
@@ -63,7 +64,7 @@ def resolve(cfg):
 
 
 def local_proxy_port(socks):
-    """The managed client binds an unauthenticated, unprivileged local port."""
+    """Validate the local endpoint; setup supplies runtime credentials separately."""
     try:
         parsed = urlsplit(socks)
         port = parsed.port
@@ -115,14 +116,22 @@ def sh(*cmd, check=True, **kw):
     return subprocess.run(cmd, check=check, text=True, **kw)
 
 
-def tunnel_env(socks=None):
+def proxy_authority(socks, auth=None):
+    port = local_proxy_port(socks)
+    credentials = ""
+    if auth is not None:
+        credentials = f"{quote(auth['user'], safe='')}:{quote(auth['pass'], safe='')}@"
+    return f"{credentials}127.0.0.1:{port}"
+
+
+def tunnel_env(socks=None, auth=None):
     """Apply the selected mode without inheriting a shell's proxy settings."""
     env = {key: value for key, value in os.environ.items() if key not in PROXY_ENV_KEYS}
     if socks is None:
         return env
-    port = local_proxy_port(socks)
-    remote_dns_socks = f"socks5h://127.0.0.1:{port}"
-    http = f"http://127.0.0.1:{port}"
+    authority = proxy_authority(socks, auth)
+    remote_dns_socks = f"socks5h://{authority}"
+    http = f"http://{authority}"
     return {
         **env,
         "all_proxy": remote_dns_socks, "ALL_PROXY": remote_dns_socks,
@@ -138,14 +147,23 @@ def prepare_proxy(c):
         return
     profile = proxy_profile(c["proxy_config"])
     port = local_proxy_port(c["socks"])
+    # WildRig 0.51.4 offers only SOCKS5 username/password authentication,
+    # even without credentials. Give it a matching private local account.
+    auth = {"user": "miner", "pass": secrets.token_urlsafe(24)}
     # Keep credentials out of process arguments and remove the input on failure
     # as well as success. The proxy manager keeps its own private runtime state.
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
-                                     prefix="miner-proxy-", suffix=".json") as stream:
+                                     prefix="miner-proxy-", suffix=".json") as stream, \
+            tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                        prefix="miner-proxy-auth-", suffix=".json") as auth_stream:
         json.dump(profile, stream, ensure_ascii=False)
         stream.flush()
+        json.dump(auth, auth_stream)
+        auth_stream.flush()
         sh(sys.executable, str(PROXY_MANAGER), "setup", "--links", stream.name,
+           "--auth-file", auth_stream.name,
            "--port", str(port), env=tunnel_env())
+    c["proxy_auth"] = auth
 
 
 def install(c):
@@ -162,7 +180,7 @@ def install(c):
 def write_env_file(c):
     values = {
         "USE_PROXY": "true" if c["use_proxy"] else "false",
-        "SOCKS": c["socks"] if c["use_proxy"] else "",
+        "SOCKS": ("socks5://" + proxy_authority(c["socks"], c.get("proxy_auth"))) if c["use_proxy"] else "",
         "POOL": c["pool_url"], "WALLET": c["wallet"],
         "WORKER": c["worker"], "POWER_LIMIT": c["power_limit"],
     }
@@ -234,7 +252,7 @@ def main():
         install(c)
         write_env_file(c)
         write_runner(c)
-        launch(tunnel_env(c["socks"] if c["use_proxy"] else None), c)
+        launch(tunnel_env(c["socks"] if c["use_proxy"] else None, c.get("proxy_auth")), c)
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         sys.exit(f"Setup failed: {exc}")
     print(f"\nLog:    tail -f {shlex.quote(str(c['logs_dir'] / 'session.log'))}")

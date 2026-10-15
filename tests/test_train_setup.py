@@ -192,6 +192,25 @@ class SetupTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "proxyConfig"):
                     setup.validate(c)
 
+    def test_authenticated_runner_matches_proxy_and_preserves_remote_dns(self):
+        auth = {"user": "miner", "pass": "private-local-password"}
+        c = {**self.c, "use_proxy": True, "proxy_auth": auth}
+        setup.install(c)
+        setup.write_env_file(c)
+        setup.write_runner(c)
+        result = subprocess.run([str(c["app_dir"] / "run_train.sh")],
+                                check=True, capture_output=True, text=True)
+        output = json.loads(result.stdout)
+        authority = "miner:private-local-password@127.0.0.1:10808"
+        self.assertEqual(output["args"][output["args"].index("--proxy") + 1], "socks5://" + authority)
+        expected = setup.tunnel_env(c["socks"], auth)
+        for key in setup.PROXY_ENV_KEYS:
+            self.assertEqual(output["env"][key], expected[key])
+        self.assertEqual(expected["all_proxy"], "socks5h://" + authority)
+        self.assertEqual(expected["http_proxy"], "http://" + authority)
+        self.assertNotIn(auth["pass"], (c["app_dir"] / "run_train.sh").read_text())
+        self.assertEqual((c["app_dir"] / ".env").stat().st_mode & 0o777, 0o600)
+
     def test_proxy_setup_uses_private_profile_and_cleans_it(self):
         for link in (TEST_LINK, "ss://chacha20-ietf-poly1305:secret@proxy.example.invalid:443"):
             with self.subTest(scheme=link.split(":")[0]):
@@ -199,6 +218,7 @@ class SetupTests(unittest.TestCase):
                      "socks": "socks5://127.0.0.1:10809"}
                 setup.validate(c)
                 paths = []
+                accounts = []
 
                 def check_command(*args, **kwargs):
                     self.assertEqual(args[:3], (setup.sys.executable, str(setup.PROXY_MANAGER), "setup"))
@@ -207,18 +227,28 @@ class SetupTests(unittest.TestCase):
                     paths.append(path)
                     self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                     self.assertEqual(json.loads(path.read_text()), setup.proxy_profile(link))
+                    auth_path = Path(args[args.index("--auth-file") + 1])
+                    paths.append(auth_path)
+                    self.assertEqual(auth_path.stat().st_mode & 0o777, 0o600)
+                    auth = json.loads(auth_path.read_text())
+                    accounts.append(auth)
+                    self.assertEqual(auth["user"], "miner")
+                    self.assertGreaterEqual(len(auth["pass"]), 24)
+                    self.assertNotIn(auth["pass"], args)
                     self.assertTrue(set(setup.PROXY_ENV_KEYS).isdisjoint(kwargs["env"]))
                     self.assertNotIn(link, args)
 
                 with patch.object(setup, "sh", side_effect=check_command) as run:
                     setup.prepare_proxy(c)
                 run.assert_called_once()
-                self.assertFalse(paths[0].exists())
+                self.assertTrue(all(not path.exists() for path in paths))
+                self.assertEqual(c["proxy_auth"], accounts[0])
                 with patch.object(setup, "sh", side_effect=subprocess.CalledProcessError(1, "proxy")) as run:
                     with self.assertRaises(subprocess.CalledProcessError):
                         setup.prepare_proxy(c)
                 args = run.call_args.args
                 self.assertFalse(Path(args[args.index("--links") + 1]).exists())
+                self.assertFalse(Path(args[args.index("--auth-file") + 1]).exists())
 
     def test_direct_mode_does_not_start_proxy(self):
         with patch.object(setup, "sh") as run:

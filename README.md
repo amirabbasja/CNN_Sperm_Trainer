@@ -198,6 +198,15 @@ python3 train_setup.py
 or starting services. Normal setup performs the connectivity test. The temporary
 profile is removed afterward; private proxy state and reports stay under `proxy/`.
 
+Mining setup also generates a random local proxy password and configures the
+miner and local SOCKS5/HTTP listener with matching credentials. WildRig 0.51.4
+offers only username/password SOCKS5 authentication, including when no credentials
+are specified; an unauthenticated listener rejects it with `no matching auth method`.
+No credential changes are needed in `config.json` or your upstream share link.
+The local credentials are kept in private runtime files and refreshed by setup.
+After updating setup code, rerun `python3 train_setup.py` to replace the old runner
+and proxy profile. Stop any manually launched foreground miner first.
+
 The runner clears inherited proxy environment settings before applying the chosen
 mode, including settings retained by tmux or supplied by `proxy_connect.sh`. In
 proxy mode it passes the local SOCKS5 endpoint to the miner's `--proxy` option,
